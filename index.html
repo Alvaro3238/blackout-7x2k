@@ -11467,7 +11467,12 @@ function startMatch(cfg){
   };
   const initial = cfg.mode==='story'&&cfg.story&&cfg.story.kind==='survive'
     ? cfg.enemies.slice(0,3) : cfg.enemies;
-  initial.forEach((e,i)=>setups.push(spawnEnemy(e,i+1)));
+  /* EN LINEA NO HAY ENEMIGOS DE IA. cfg.enemies solo lo traen historia, mundo
+     abierto y entrenamiento; en un duelo en linea llega sin definir y este
+     forEach reventaba, asi que el bloque de mas abajo -- el que arma de verdad
+     la partida en linea -- no llegaba a ejecutarse nunca y la pantalla se
+     quedaba en negro. */
+  (initial||[]).forEach((e,i)=>setups.push(spawnEnemy(e,i+1)));
 
   /* --- EN LÍNEA: los dos clientes deben construir EXACTAMENTE la misma partida.
      El orden lo fija el rol (0/1), no quién eres tú, y ningún luchador lleva IA. --- */
