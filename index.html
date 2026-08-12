@@ -2034,6 +2034,14 @@ const DT = 1/60;
    Los tres mandos que alargan y espesan las peleas. Estan juntos a proposito:
    se tocan estos numeros y nada mas. Multiplican, no sustituyen, asi que las
    proporciones entre personajes del roster se conservan intactas.          */
+/* Energia maldita que le cuesta a un enemigo de la maquina cada golpe basico.
+   Los basicos son gratis para todo el mundo, asi que la IA los encadenaba sin
+   parar y no daba respiro. Ahora se le agota, tiene que dejar de pegar
+   mientras se recarga, y ese hueco es tu turno.
+   Solo afecta a la IA: entre personas nadie paga por su basico, asi que el
+   equilibrio del uno contra uno se queda exactamente como estaba. */
+const IA_COSTE_BASICO = 8;
+
 const TUNE = {
   hp:      1.50,   // mas aguante: las peleas duran
   ceRegen: 0.70,   // la energia maldita vuelve mas despacio: hay que dosificar
@@ -2420,7 +2428,8 @@ class Game {
     if(inp.basic && !f.prevInput.basic && !stunned){
       if(f.atk && f.bf.armWindow) { /* pulsación de Flash Negro */ }
       if(f.cds.basic<=0 && !f.atk){
-        if(!f.C.basic.cost || this.spend(f, f.C.basic.cost)) this.startAttack(f, f.C.basic, 'basic');
+        const coste = f.ai ? Math.max(f.C.basic.cost||0, IA_COSTE_BASICO) : (f.C.basic.cost||0);
+        if(!coste || this.spend(f, coste)) this.startAttack(f, f.C.basic, 'basic');
       }
       else this.tryArmBF(f);
     }
@@ -3778,7 +3787,7 @@ function makeAI(cfg){
 
       // atacar
       const basicRange=(f.C.basic.proj?300:f.C.basic.range+22);
-      if(d<basicRange && f.cds.basic<=0 && reaction<=0 && f.ce>=(f.C.basic.cost||0)){
+      if(d<basicRange && f.cds.basic<=0 && reaction<=0 && f.ce>=Math.max(f.C.basic.cost||0, IA_COSTE_BASICO)){
         inp.basic=true; reaction=(1-diff)*0.28*(1-fase*0.30);
         // intento de Flash Negro
         /* El Flash Negro multiplica el dano por 2,5. Que la IA lo clavara casi
@@ -3924,7 +3933,7 @@ const STORY = [
 { id:'m1', no:'一', title:'El velo que nadie plantó', jp:'誰も張っていない帳',
   map:'nakano', hero:'yuji', heroLocked:true,
   obj:'Exorciza a todas las maldiciones del velo', kind:'clear',
-  enemies:[ {cid:'curse_grunt',n:5,diff:0.35} ],
+  enemies:[ {cid:'curse_grunt',n:3,diff:0.19} ],
   reward:'Tutorial completado',
   brief:[
     {s:'Ijichi',t:'Diecisiete días desde Shibuya. Gojo-san sigue sellado. Y esta madrugada ha aparecido un velo sobre Nakano… que nadie ha plantado.'},
@@ -3944,7 +3953,7 @@ const STORY = [
 { id:'m2', no:'二', title:'Ecos en el andén', jp:'ホームの残響',
   map:'shibuya_b5', hero:'megumi', heroLocked:true,
   obj:'Sobrevive y elimina a la maldición de grado 1', kind:'clear',
-  enemies:[ {cid:'curse_grunt',n:4,diff:0.45}, {cid:'curse_special',n:1,diff:0.6,boss:true} ],
+  enemies:[ {cid:'curse_grunt',n:2,diff:0.25}, {cid:'curse_special',n:1,diff:0.33,boss:true} ],
   reward:'Registro de combate desbloqueado',
   brief:[
     {s:'Megumi',t:'La B5F de Shibuya sigue precintada. Nadie ha limpiado nada aquí abajo.'},
@@ -3962,7 +3971,7 @@ const STORY = [
 { id:'m3', no:'三', title:'Impuesto de sangre', jp:'血の徴収',
   map:'kabukicho', hero:'nobara',
   obj:'Derrota al Recaudador de Kabukichō', kind:'clear',
-  enemies:[ {cid:'transfigured',n:6,diff:0.4}, {cid:'curse_special',n:1,diff:0.72,boss:true,hpMul:1.4} ],
+  enemies:[ {cid:'transfigured',n:4,diff:0.22}, {cid:'curse_special',n:1,diff:0.4,boss:true,hpMul:1.14} ],
   unlock:'jogo',
   reward:'Registro de combate: JOGO',
   brief:[
@@ -3980,7 +3989,7 @@ const STORY = [
 { id:'m4', no:'四', title:'La sala en pendiente', jp:'傾いた劇場',
   map:'kinema', hero:'nanami',
   obj:'Elimina a los transfigurados y al espectro archivado', kind:'clear',
-  enemies:[ {cid:'transfigured',n:8,diff:0.45}, {cid:'mahito',n:1,diff:0.68,boss:true,hpMul:0.75} ],
+  enemies:[ {cid:'transfigured',n:5,diff:0.25}, {cid:'mahito',n:1,diff:0.37,boss:true,hpMul:0.75} ],
   unlock:'mahito',
   reward:'Registro de combate: MAHITO',
   brief:[
@@ -3998,8 +4007,8 @@ const STORY = [
 { id:'m5', no:'五', title:'Sangre que no es tuya', jp:'他人の血',
   map:'crater', hero:'yuji',
   obj:'Aguanta la oleada junto a Choso', kind:'survive', survive:75,
-  enemies:[ {cid:'curse_grunt',n:4,diff:0.5}, {cid:'transfigured',n:5,diff:0.5}, {cid:'curse_special',n:2,diff:0.62} ],
-  allies:[ {cid:'choso',diff:0.75} ],
+  enemies:[ {cid:'curse_grunt',n:2,diff:0.28}, {cid:'transfigured',n:3,diff:0.28}, {cid:'curse_special',n:1,diff:0.34} ],
+  allies:[ {cid:'choso',diff:0.41} ],
   unlock:'choso',
   reward:'Registro de combate: CHOSO',
   brief:[
@@ -4018,7 +4027,7 @@ const STORY = [
 { id:'m6', no:'六', title:'Lo que Maki no ve', jp:'真希に見えないもの',
   map:'zenin', hero:'maki', heroLocked:true,
   obj:'Expulsa a Kagerō de la finca Zenin', kind:'boss', bossFlee:0.45,
-  enemies:[ {cid:'kagero',n:1,diff:0.7,boss:true,hpMul:0.55} ],
+  enemies:[ {cid:'kagero',n:1,diff:0.39,boss:true,hpMul:0.55} ],
   unlock:'yuta',
   reward:'YUTA OKKOTSU desbloqueado',
   brief:[
@@ -4038,7 +4047,7 @@ const STORY = [
 { id:'m7', no:'七', title:'El tribunal de Nakano', jp:'中野の法廷',
   map:'colony', hero:'higuruma', heroForce:true,
   obj:'Acumula pruebas y dicta sentencia', kind:'clear',
-  enemies:[ {cid:'curse_special',n:2,diff:0.6}, {cid:'uraume',n:1,diff:0.72,boss:true,hpMul:0.9} ],
+  enemies:[ {cid:'curse_special',n:1,diff:0.33}, {cid:'uraume',n:1,diff:0.4,boss:true,hpMul:0.9} ],
   unlock:'higuruma',
   reward:'HIROMI HIGURUMA desbloqueado',
   brief:[
@@ -4057,7 +4066,7 @@ const STORY = [
 { id:'m8', no:'八', title:'La apuesta', jp:'博打',
   map:'kabukicho', hero:'hakari', heroForce:true,
   obj:'Gana el duelo antes de que se agoten tus fichas', kind:'clear',
-  enemies:[ {cid:'kashimo',n:1,diff:0.78,boss:true}, {cid:'curse_grunt',n:3,diff:0.5} ],
+  enemies:[ {cid:'kashimo',n:1,diff:0.43,boss:true}, {cid:'curse_grunt',n:2,diff:0.28} ],
   unlock:'hakari',
   reward:'KINJI HAKARI desbloqueado',
   brief:[
@@ -4073,33 +4082,16 @@ const STORY = [
     {s:'Hakari',t:'He tenido fichas. No es lo mismo.'}
   ]},
 
-{ id:'m9', no:'九', title:'La rueda gira', jp:'輪が回る',
-  map:'shinjuku', hero:'megumi',
-  obj:'Sobrevive a Mahoraga', kind:'boss',
-  enemies:[ {cid:'mahoraga',n:1,diff:0.82,boss:true,hpMul:0.7} ],
-  unlock:'kenjaku',
-  reward:'KENJAKU desbloqueado',
-  brief:[
-    {s:'Kagerō',t:'Un décimo de mil años de jujutsu, Fushiguro. ¿Sabes lo que se compra con eso?'},
-    {s:'Kagerō',t:'Se compra una llave. Y las Diez Sombras siempre han tenido una cerradura que nadie quiso abrir.'},
-    {s:'Megumi',t:'…No. NO.'},
-    {s:'Kagerō',t:'Yo no lo he domado. Solo lo he pagado. Que lo dome otro.'},
-    {s:'Megumi',t:'La rueda. Si repito un ataque, se adapta. Tengo que variar. Siempre variar.'}
-  ],
-  after:[
-    {s:'Megumi',t:'Se ha desvanecido. No lo he derrotado: se ha acabado el crédito.'},
-    {s:'Yuji',t:'Megumi. Estás en pie. Con eso me vale.'},
-    {s:'Megumi',t:'El velo de Nakano se ha vuelto a cerrar. Y esta vez el carácter que hay grabado en el altar no es 灰.'},
-    {s:'Megumi',t:'Es 星. Estrella.'}
-  ]},
+/* La mision de Mahoraga se ha retirado: su adaptacion progresiva la volvia
+   injugable. KENJAKU, que se desbloqueaba ahi, pasa a la mision final. */
 
 { id:'m10', no:'十', title:'Ceniza de Estrellas', jp:'星の灰',
   map:'nakano', hero:null,
   obj:'Derrota a Kagerō Shimon', kind:'boss',
-  enemies:[ {cid:'kagero',n:1,diff:0.88,boss:true} ],
-  allies:[ {cid:'yuta',diff:0.8} ],
-  unlock:['gojo','sukuna'],
-  reward:'GOJO y SUKUNA desbloqueados',
+  enemies:[ {cid:'kagero',n:1,diff:0.48,boss:true} ],
+  allies:[ {cid:'yuta',diff:0.44} ],
+  unlock:['kenjaku','gojo','sukuna'],
+  reward:'KENJAKU, GOJO y SUKUNA desbloqueados',
   brief:[
     {s:'Kagerō',t:'Mil años recaudando. Un décimo de cada técnica, de cada dominio, de cada Flash Negro que se ha encendido sobre este archipiélago.'},
     {s:'Kagerō',t:'No he peleado nunca. No me hace falta. Todo lo que sabéis hacer ya está en mi erario.'},
@@ -4198,7 +4190,19 @@ function applyRanked(opp, win, stats){
    - Cada 120 fotogramas se intercambia un checksum para detectar desincronía.
    Basta con levantar el servidor relay incluido (server.js) y pegar su URL.  */
 
-const NET_DELAY = 3;
+/* Fotogramas de margen del paso bloqueado. Tu entrada no se aplica al pulsarla:
+   se programa para dentro de NET_DELAY fotogramas, que es el tiempo que le doy
+   a la del rival para llegar. Si el viaje de ida y vuelta tarda MAS que este
+   margen, el juego se planta a esperar en cada fotograma y va a tirones.
+     3 fotogramas =  50 ms  · solo vale con el servidor al lado
+     6 fotogramas = 100 ms  · sirve para un servidor en Europa
+    12 fotogramas = 200 ms  · sirve incluso cruzando el Atlantico
+   Subirlo hace que el mando responda un pelin mas tarde, pero el combate va
+   fluido; dejarlo corto no quita retardo, lo convierte en tirones, que es
+   mucho peor. Los dos clientes tienen que usar EL MISMO numero o se
+   desincronizan, por eso es una constante y no un ajuste. */
+const NET_DELAY = 6;
+
 
 class NetAdapter {
   constructor(){ this.remote={}; this.ready=false; this.role=0; this.desync=false; this.ping=0; }
