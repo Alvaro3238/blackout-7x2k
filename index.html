@@ -1965,15 +1965,6 @@ const M_SEED = 17.13;
 /* --------- desbloqueo por gesto del usuario (política de autoplay) ------- */
 ['pointerdown','keydown','click'].forEach(ev=>
   window.addEventListener(ev, ()=>{ if(!AU.started){ AU.resume(); } }, {once:false, passive:true}));
-/* Y al irse de la pagina, el audio se DUERME. Sin esto el navegador puede
-   guardar la pestaña en su cache y dejar el contexto vivo: la musica y todo lo
-   que quedara programado seguian sonando despues de cerrar el juego. */
-['pagehide','beforeunload'].forEach(ev=>
-  window.addEventListener(ev, ()=>{ try{ AU.musicStop(); AU.ctx && AU.ctx.suspend(); }catch(e){} }));
-document.addEventListener('visibilitychange', ()=>{
-  try{ if(document.hidden){ AU.ctx && AU.ctx.suspend(); }
-       else if(AU.started){ AU.ctx && AU.ctx.resume(); } }catch(e){}
-});
 
 /* ============================================================================
    c_engine.js — Simulación determinista a 60 Hz
@@ -5847,16 +5838,7 @@ const SYNC = {
   url:'', ws:null, busy:false, state:'desconectado', msg:'', at:0,
 
   defaultUrl(){
-    const guardada = STORE.get('jjk_srv');
-    if(guardada) return guardada;
-    /* Si el juego se esta sirviendo desde una web, el relay vive en esa MISMA
-       direccion: es el mismo servidor el que entrega la pagina y el que hace
-       de cable. Asi el jugador no tiene que escribir ninguna URL a mano.
-       https obliga a wss:// -- un https no acepta un socket ws:// sin cifrar.
-       Solo cuando el archivo se abre suelto (file://) se cae al localhost. */
-    if(location.protocol === 'https:') return 'wss://' + location.host;
-    if(location.protocol === 'http:')  return 'ws://'  + location.host;
-    return 'ws://localhost:8787';
+    return STORE.get('jjk_srv') || 'ws://localhost:8787';
   },
   setUrl(u){ this.url=u; STORE.set('jjk_srv', u); },
 
@@ -12349,19 +12331,14 @@ function introEpica(seguir){
      capa y se entra al menu igual. Y por si algo se atasca sin lanzar error,
      hay ademas un temporizador que la remata pase lo que pase. */
   let cerrada=false;
-  const NODOS_REF=[];
-  const cerrar=(corta)=>{
+  const cerrar=()=>{
     if(cerrada) return; cerrada=true;
-    /* Si la intro se corta antes de tiempo (error o temporizador de rescate)
-       hay sonido ya PROGRAMADO en el futuro que seguiria saliendo solo. Se
-       para uno por uno. */
-    if(corta) try{ NODOS_REF.forEach(n=>{ try{ n.stop(); }catch(e){} }); }catch(e){}
     try{ const c=document.getElementById('introcv'); if(c) c.remove(); }catch(e){}
     try{ const a=document.getElementById('introaviso'); if(a) a.remove(); }catch(e){}
     try{ if(AU.ok && AU.started) AU.musicStart('menu'); }catch(e){}
     try{ seguir(); }catch(e){ console.error(e); }
   };
-  setTimeout(()=>cerrar(true), 20000);
+  setTimeout(cerrar, 20000);
   try{
   const cvI = document.createElement('canvas');
   cvI.id='introcv';
@@ -12392,17 +12369,9 @@ function introEpica(seguir){
   }
 
   /* --------------------------- sonido ------------------------------- */
-  const NODOS=NODOS_REF;                // todo lo que suene queda fichado aqui
-  const O=(...a)=>{ try{ const n=AU.osc(...a);   if(n) NODOS.push(n); }catch(e){} };
-  const N=(...a)=>{ try{ const n=AU.noise(...a); if(n) NODOS.push(n); }catch(e){} };
   let sonando=false;
   function suena(){ try{
-    /* Ya NO se mira ctx.state aqui. Ese era el fallo por el que la intro salia
-       muda: ctx.resume() es ASINCRONO, asi que en el instante justo despues de
-       llamarlo el estado sigue siendo 'suspended' y esta linea abortaba el
-       sonido entero. Ahora suena() solo se llama cuando la promesa de resume()
-       ya ha resuelto, asi que si llega aqui es que el audio esta vivo. */
-    if(sonando || !AU.ok || !AU.ctx) return;
+    if(sonando || !AU.ok || !AU.ctx || AU.ctx.state==='suspended') return;
     sonando=true;
     const t=AU.now()+0.02, S=AU.sfx, V=AU.sfxVerb||AU.sfx;
 
@@ -12413,62 +12382,50 @@ function introEpica(seguir){
        la anterior: la envolvente de AU.osc decae sola, asi que la sensacion
        de que algo crece se consigue apilandolas, no alargando una. */
     [[0.00,0.15],[0.85,0.26],[1.62,0.42]].forEach(([off,pk])=>{
-      O('sine', 36, 44, t+off, Math.max(0.3, T_CORTE-off-0.02), S, pk);
+      AU.osc('sine', 36, 44, t+off, Math.max(0.3, T_CORTE-off-0.02), S, pk);
     });
-    O('sine', 54, 66, t+0.55, T_CORTE-0.57, S, 0.13);   // la quinta, abre el acorde
-    O('triangle', 108, 132, t+1.20, T_CORTE-1.22, S, 0.035);
+    AU.osc('sine', 54, 66, t+0.55, T_CORTE-0.57, S, 0.13);   // la quinta, abre el acorde
+    AU.osc('triangle', 108, 132, t+1.20, T_CORTE-1.22, S, 0.035);
 
     /* 2. EL FUEGO: un solo barrido GRAVE y corto. El de antes subia a 3400 Hz
        y por eso silbaba; este baja de 900 a 200. */
-    N('burst', t+T_FUEGO, 0.50, S, 0.24, {type:'lowpass', f0:900, f1:200, q:0.9});
-    O('sine', 88, 150, t+T_FUEGO, 0.80, S, 0.10, 'exp');
+    AU.noise('burst', t+T_FUEGO, 0.50, S, 0.24, {type:'lowpass', f0:900, f1:200, q:0.9});
+    AU.osc('sine', 88, 150, t+T_FUEGO, 0.80, S, 0.10, 'exp');
 
     /* 3. tres golpes de tambor, cada uno mas cerca y mas fuerte */
     for(let i=0;i<3;i++)
-      O('sine', 124, 44, t+T_FUEGO+0.40+i*0.40, 0.32, S, 0.26+i*0.09, 'exp');
+      AU.osc('sine', 124, 44, t+T_FUEGO+0.40+i*0.40, 0.32, S, 0.26+i*0.09, 'exp');
 
     /* 4. SILENCIO. Dos latidos y nada mas. */
-    O('sine', 62, 38, t+T_CORTE+0.22, 0.24, S, 0.15, 'exp');
-    O('sine', 62, 36, t+T_CORTE+0.56, 0.26, S, 0.21, 'exp');
+    AU.osc('sine', 62, 38, t+T_CORTE+0.22, 0.24, S, 0.15, 'exp');
+    AU.osc('sine', 62, 36, t+T_CORTE+0.56, 0.26, S, 0.21, 'exp');
 
     /* 5. EL GOLPE: percusion grave y campana. La onda cuadrada que caia hasta
        28 Hz era lo que sonaba a pedorreta -- una cuadrada por debajo de 40 Hz
        no da grave, da zumbido. Fuera. La campana son tres parciales
        inarmonicos (1, 2.76, 5.40), que es lo que le da el filo metalico. */
-    O('sine', 190, 48, t+T_GOLPE, 1.05, S, 0.92, 'exp');
-    N('burst', t+T_GOLPE, 0.26, S, 0.30, {type:'lowpass', f0:2800, f1:400, q:0.9});
+    AU.osc('sine', 190, 48, t+T_GOLPE, 1.05, S, 0.92, 'exp');
+    AU.noise('burst', t+T_GOLPE, 0.26, S, 0.30, {type:'lowpass', f0:2800, f1:400, q:0.9});
     [1, 2.76, 5.40].forEach((r,i)=>
-      O('sine', 233*r, 233*r, t+T_GOLPE+0.01, 2.6-i*0.55, S, 0.19/(i+1)));
-    N('burst', t+T_GOLPE+0.02, 1.10, V, 0.24, {type:'bandpass', f0:1200, f1:300, q:0.9});
+      AU.osc('sine', 233*r, 233*r, t+T_GOLPE+0.01, 2.6-i*0.55, S, 0.19/(i+1)));
+    AU.noise('burst', t+T_GOLPE+0.02, 1.10, V, 0.24, {type:'bandpass', f0:1200, f1:300, q:0.9});
 
     /* 6. COLA: una nota grave sostenida que se apaga limpia. Nada de barridos
        hacia el infrasonido, que es de donde salia el ruido del final. */
-    O('sine',  55,  55, t+T_GOLPE+0.30, 2.6, S, 0.24);
-    O('sine', 110, 110, t+T_GOLPE+0.30, 2.1, S, 0.07);
-    O('sine', 165, 165, t+T_GOLPE+0.45, 1.6, S, 0.030);
+    AU.osc('sine',  55,  55, t+T_GOLPE+0.30, 2.6, S, 0.24);
+    AU.osc('sine', 110, 110, t+T_GOLPE+0.30, 2.1, S, 0.07);
+    AU.osc('sine', 165, 165, t+T_GOLPE+0.45, 1.6, S, 0.030);
     }catch(e){ console.warn('intro sin sonido:', e); }
   }
 
   /* Politica de autoplay: el aviso SOLO sale si el navegador tiene el audio
      dormido. Empaquetado como app de escritorio no aparece nunca. */
-  /* Despertar el audio de verdad. AU.resume() arranca ademas la musica del
-     menu, que sonaria ENCIMA de la intro y se cargaria justo el silencio del
-     que vive el golpe: se apaga aqui y se reanuda en cerrar(). */
-  function despierta(){
-    try{
-      if(!AU.ok) AU.init();
-      if(!AU.ctx) return Promise.resolve(false);
-      const pr = AU.ctx.state==='running' ? Promise.resolve() : AU.ctx.resume();
-      return Promise.resolve(pr).then(()=>{
-        AU.started = true;
-        try{ AU.musicStop(); }catch(e){}
-        return AU.ctx.state==='running';
-      }, ()=>false);
-    }catch(e){ return Promise.resolve(false); }
-  }
+  /* AU.resume() arranca de paso la musica del menu, que sonaria ENCIMA de la
+     intro y se cargaria justo el silencio del que vive el golpe. Se apaga
+     aqui y se vuelve a encender en cerrar(). */
+  try{ AU.resume(); AU.musicStop(); }catch(e){ console.warn('audio:', e); }
   let aviso=null;
-  try{ if(!AU.ok) AU.init(); }catch(e){}
-  if(!AU.ctx || AU.ctx.state!=='running'){
+  if(!AU.ctx || AU.ctx.state==='suspended'){
     aviso=document.createElement('div');
     aviso.id='introaviso';
     aviso.style.cssText='position:fixed;inset:0;z-index:10000;display:flex;align-items:center;'+
@@ -12477,18 +12434,13 @@ function introEpica(seguir){
     aviso.innerHTML='<div style="font-size:52px;color:#ff7a2a;text-shadow:0 0 30px #ff5a10">黒閃</div>'+
       '<div style="font-size:12px;letter-spacing:5px;color:#7d7d96">PULSA PARA EMPEZAR</div>';
     document.body.appendChild(aviso);
-    /* El reloj de la animacion NO arranca hasta que el audio esta vivo de
-       verdad, para que imagen y sonido vayan clavados. */
-    const arranca=()=>{
-      despierta().then(()=>{
-        if(aviso){ aviso.remove(); aviso=null; }
-        t0=performance.now(); ult=t0; suena();
-      });
-    };
+    const arranca=()=>{ try{ AU.resume(); AU.musicStop(); }catch(e){}
+      if(aviso){ aviso.remove(); aviso=null; }
+      t0=performance.now(); ult=t0; suena(); };
     aviso.addEventListener('pointerdown', arranca, {once:true});
     window.addEventListener('keydown', function k(){ if(aviso){ arranca(); }
       window.removeEventListener('keydown', k); });
-  } else despierta().then(()=>{ t0=performance.now(); ult=t0; suena(); });
+  } else suena();
 
   /* ---------------------------- bucle -------------------------------- */
   let t0=performance.now(), ult=t0;
@@ -12622,10 +12574,10 @@ function introEpica(seguir){
 
     if(T<DUR) requestAnimationFrame(paso);
     else { try{ window.removeEventListener('resize', medir); }catch(e){} cerrar(); }
-   }catch(e){ console.error('intro:', e); cerrar(true); }
+   }catch(e){ console.error('intro:', e); cerrar(); }
   }
   requestAnimationFrame(paso);
-  }catch(e){ console.error('intro:', e); cerrar(true); }
+  }catch(e){ console.error('intro:', e); cerrar(); }
 }
 
 /* ------------------------------ ARRANQUE -------------------------------- */
