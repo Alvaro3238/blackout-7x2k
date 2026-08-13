@@ -996,9 +996,7 @@ tokyo_city: {
     /* --- Sensō-ji en Asakusa: pagoda, puerta y pabellón --- */
     W(4250,1250,90,90,'tower',53), W(4450,1400,180,120,'solid',22),
     W(4390,1600,60,26,'solid',14),
-    /* --- Palacio Imperial: foso de agua y murallas --- */
-    W(2500,900,1000,60,'water'), W(2500,1500,1000,60,'water'),
-    W(2500,900,60,660,'water'), W(3440,900,60,660,'water'),
+    /* --- Palacio Imperial: murallas (el foso de agua se ha retirado) --- */
     W(2700,1050,120,120,'solid',26), W(3150,1050,120,120,'solid',26),
     W(2900,1250,240,160,'solid',30),
     /* --- Rainbow Bridge sobre la bahía, al sur --- */
@@ -1045,8 +1043,7 @@ kyoto_city: {
   walls:[
     /* --- Torre de Kioto, 131 m: el único hito moderno --- */
     W(2400,3100,110,110,'tower',131), W(2340,3220,230,90,'solid',30),
-    /* --- Kinkaku-ji, el Pabellón Dorado, sobre su estanque --- */
-    W(800,700,700,500,'water'),
+    /* --- Kinkaku-ji, el Pabellón Dorado (sin el estanque) --- */
     W(1000,850,150,130,'solid',28), W(1030,820,90,60,'solid',36),
     /* --- Fushimi Inari: el corredor de torii subiendo la ladera --- */
     W(3900,2400,40,26,'low'), W(3980,2320,40,26,'low'), W(4060,2240,40,26,'low'),
@@ -1059,9 +1056,7 @@ kyoto_city: {
     W(3320,1020,40,40,'solid',48), W(3480,1020,40,40,'solid',48),
     W(3640,1020,40,40,'solid',48), W(3400,1120,40,40,'solid',48),
     W(3560,1120,40,40,'solid',48),
-    /* --- Castillo Nijō: foso y murallas --- */
-    W(1900,1400,900,50,'water'), W(1900,2000,900,50,'water'),
-    W(1900,1400,50,650,'water'), W(2750,1400,50,650,'water'),
+    /* --- Castillo Nijō: murallas (sin foso) --- */
     W(2150,1600,300,220,'solid',34), W(2100,1560,80,60,'solid',44),
     /* --- Estación de Kioto: mole moderna de cristal --- */
     W(2050,2900,560,180,'tall',72),
@@ -2042,6 +2037,29 @@ const DT = 1/60;
    equilibrio del uno contra uno se queda exactamente como estaba. */
 const IA_COSTE_BASICO = 8;
 
+/* ------------------------- AGUANTE DE LA GUARDIA -------------------------
+   Bloquear ya no es gratis en el tiempo. Una barra se llena mientras aguantas
+   y da un tiron cada vez que paras un golpe; si se llena entera sin que hayas
+   soltado, la guardia se rompe y te quedas quieto un segundo. Al soltar, la
+   barra se vacia desde donde estuviera, asi que interesa bloquear a golpes
+   cortos y no dejarlo apretado.                                            */
+const GUARDIA_LLENADO = 3.0;   // segundos de bloqueo seguido hasta llenarla
+const GUARDIA_GOLPE   = 0.18;  // tiron maximo al parar un ataque
+/* Daño de referencia: parar un golpe de esta fuerza cuesta el tiron entero, y
+   uno mas flojo cuesta la parte proporcional. Sin esto, un ataque continuo
+   -- el fuego de Jogo, la sangre de Choso -- llama a la funcion de daño 60
+   veces por segundo y cobraba el tiron completo en cada tic: la guardia
+   reventaba en 0,12 s y parecia que bloquear te paralizaba al instante. */
+const GUARDIA_GOLPE_REF = 55;
+const GUARDIA_VACIADO = 2.0;   // segundos en vaciarse del todo al soltar
+const GUARDIA_CASTIGO = 1.0;   // segundos inmovil si la revientas
+/* La guardia SOLO tapa por delante. Antes te envolvia una burbuja que paraba
+   desde cualquier angulo, asi que bloquear era gratis y no habia forma de
+   castigarlo. Ahora es una placa hacia donde miras: rodear al que bloquea es
+   una jugada, y estrellarse de frente contra ella se paga con un segundo
+   clavado en el sitio. */
+const GUARDIA_ARCO = 1.9;      // radianes de cobertura frontal (~109 grados)
+
 const TUNE = {
   hp:      1.50,   // mas aguante: las peleas duran
   ceRegen: 0.70,   // la energia maldita vuelve mas despacio: hay que dosificar
@@ -2218,7 +2236,7 @@ class Game {
       input: blankInput(), prevInput: blankInput(),
       dmgDealt:0, dmgTaken:0, bfCount:0, bfChain:0, bfLast:-99, bfStreak:0, phase:0, kills:0, ceSpent:0,
       healed:0, domCount:0, copyCount:0,
-      look: s.look||null, rikaT:0, repelT:0, blockHit:0, blockAng:undefined,
+      look: s.look||null, rikaT:0, repelT:0, blockHit:0, blockAng:undefined, gb:0, gbRoto:false,
       /* poder: el de una maldicion de mision, o el bono de maestria del heroe */
       powMul: (s.powMul||1)*((s.mast&&s.mast.pow)||1), spdMul: s.spdMul||1,
       lifetime: s.lifetime||0, born:this.t, invuln:0, stealth:0,
@@ -2300,6 +2318,10 @@ class Game {
     if(f.rikaT>0) f.rikaT-=DT;          // cuenta atras de Rika
     if(f.repelT>0) f.repelT-=DT;        // rebote contra una guardia
     if(f.blockHit>0) f.blockHit-=DT;    // sacudida del que para el golpe
+    /* Que se vea desde fuera que el rival esta clavado: sin esto, en pantalla
+       parece que se ha quedado pensando. */
+    if(f.alive && (f.status.stun||f.status.paralysis) && this.frame%4===0)
+      this.addFX({type:'para', x:f.x, y:f.y, life:.40});
 
     // dominio propio
     /* El reloj del dominio corria TAMBIEN durante el hitstop. Como el corte
@@ -2406,10 +2428,32 @@ class Game {
     }
     /* ---- refuerzo / guardia ---- */
     f.guarding = false;
-    if(inp.guard && !stunned){
+    /* Con la guardia rota no se puede volver a bloquear hasta que la barra
+       termine de bajar: el castigo no es solo el segundo clavado, es quedarte
+       sin defensa mientras se enfria. */
+    if(inp.guard && !stunned && !f.gbRoto){
       const cost=8*DT;
       if(f.ce>=cost){ f.ce-=cost; f.guarding=true;
-        if(this.frame%8===0) this.addFX({type:'guard',x:f.x,y:f.y,c:f.C.color,life:.25}); }
+        if(this.frame%8===0) this.addFX({type:'guardarc',x:f.x,y:f.y,a:f.ang,c:f.C.color,life:.22}); }
+    }
+    /* --- aguante de la guardia --- */
+    if(f.guarding){
+      f.gb += DT/GUARDIA_LLENADO;
+      if(f.gb>=1){
+        /* Se ha pasado de listo aguantando: guardia rota. La barra NO se
+           vacia de golpe -- se queda llena y baja sola, y hasta que no llegue
+           abajo no hay guardia. */
+        f.gb=1; f.guarding=false; f.gbRoto=true;
+        this.applyStatus(f,'stun',GUARDIA_CASTIGO);
+        this.ev('guardbreak', f, 'GUARDIA ROTA');
+        this.snd('hit', f.x, f.y, {p:0.42});
+        this.addFX({type:'bfring', x:f.x, y:f.y, life:.3});
+        this.shake=Math.max(this.shake,0.45);
+      }
+    } else if(f.gb>0){
+      /* al soltar se vacia desde donde se hubiera quedado */
+      f.gb = Math.max(0, f.gb - DT/GUARDIA_VACIADO);
+      if(f.gb<=0) f.gbRoto=false;        // ya esta fria: vuelve a haber guardia
     }
 
     /* ---- esquiva ---- */
@@ -3054,8 +3098,20 @@ class Game {
     // corte de alma: ignora mitigación
     const soulPierce = o.type==='soul'||o.pierceGuard;
     // guardia / refuerzo
-    if(tgt.guarding && !soulPierce){
-      dmg*=0.45;
+    /* ¿Viene el golpe por donde esta puesta la guardia? Sin fuente conocida
+       -- una quemadura, el fuego de un barril -- se considera que si. */
+    const deFrente = !src || Math.abs(angDiff(Math.atan2(src.y-tgt.y, src.x-tgt.x), tgt.ang)) < GUARDIA_ARCO/2;
+    let paradoEnSeco = false;
+    if(tgt.guarding && deFrente && !soulPierce){
+      /* Una guardia que aun deja pasar el 45% no es una guardia, es un
+         descuento. Lo que entra por delante se para ENTERO, sea un puñetazo o
+         un proyectil. Bloquear ya se paga por otro lado: cuesta energia
+         maldita, llena la barra de aguante, te deja mirando a un solo sitio y
+         si la revientas te clava un segundo. */
+      /* El tiron va con la fuerza de lo parado: un mandoble cansa, un tic de
+         fuego casi nada. Se mide ANTES de anular el daño. */
+      tgt.gb = Math.min(1, tgt.gb + GUARDIA_GOLPE*clamp(dmg/GUARDIA_GOLPE_REF, 0.05, 1));
+      dmg = 0; paradoEnSeco = true;
       /* REPELIDO. Estrellarse contra una guardia devuelve el golpe: el
          atacante rebota y se queda quieto 0,75 s, lo que dura la animacion.
          Solo con golpes de contacto, y no encadenable: mientras dure el
@@ -3066,7 +3122,7 @@ class Game {
            quieto, porque el castigo es para quien se estrella. Sin esto,
            bloquear no se sentia: al defensor no le pasaba nada en pantalla. */
         tgt.blockHit = 0.26;
-        this.applyStatus(src,'stun',0.75);
+        this.applyStatus(src,'stun',GUARDIA_CASTIGO);
         this.shake=Math.max(this.shake,0.55); this.hitstop=Math.max(this.hitstop,0.09);
         this.ev('repel', src, 'REPELIDO');
         this.snd('hit', src.x, src.y, {p:0.55});
@@ -3085,7 +3141,10 @@ class Game {
     // Diezmo del jefe
     if(tgt.C.passive.id==='tithe' && src){ /* gestionado en spend() */ }
 
-    dmg=Math.max(1,dmg);
+    /* Hay un suelo de 1 punto para que ningun golpe quede en cero por
+       redondeos. Un golpe PARADO si tiene que quedar en cero limpio: si no,
+       aguantar una lluvia de proyectiles te iba desangrando de uno en uno. */
+    dmg = paradoEnSeco ? 0 : Math.max(1,dmg);
     tgt.hp-=dmg; tgt.dmgTaken+=dmg; tgt.lastHurt=this.t;
     if(src){ src.dmgDealt+=dmg; src.domGauge=clamp(src.domGauge+dmg*0.13*TUNE.domGain,0,100); }
     tgt.domGauge=clamp(tgt.domGauge+dmg*0.09*TUNE.domGain,0,100);
@@ -3197,6 +3256,11 @@ class Game {
        caducaba JAMAS. Le paso al incendio del escenario: ardias hasta morir.
        Con esto, un olvido futuro produce un estado corto, no uno infinito. */
     if(!isFinite(t)) t = 2.0;
+    /* PARALIZARSE INTERRUMPE. Sin esto, el golpe que ya estaba lanzado seguia
+       su curso y te alcanzaba igual: la IA se quedaba clavada pero su puño
+       llegaba, y desde fuera parecia que la paralisis no le hacia nada.
+       Ahora se le cae el ataque de las manos, como debe ser. */
+    if(k==='stun'||k==='freeze'||k==='paralysis'){ f.atk=null; f.guarding=false; }
     if(k==='freeze' && !f.status.freeze) this.snd('ice', f.x, f.y);
     if(k==='soulcut'&&f.C.passive.id==='wheel') t*=0.5;
     /* Un unico punto para acortar los efectos continuos: da igual que vengan
@@ -7721,9 +7785,26 @@ function drawFX3(g){
       case 'dash': case 'trail':
         R3.draw('sph', w3(e.x),0.9,w3(e.y), (0.55*a)*2,(0.55*a)*2,(0.55*a)*2,0,c,
           {alpha:a*0.45,add:true}); break;
-      case 'guard':
-        R3.draw('sphHi', w3(e.x),1.0,w3(e.y), 2.4,2.8,2.4,0,[0.45,0.65,1],
-          {alpha:a*0.16,add:true,noCull:true}); break;
+      case 'guardarc': {
+        /* placa plana por delante, girada hacia donde mira quien bloquea */
+        const dx=Math.cos(e.a), dy=Math.sin(e.a);
+        R3.draw('box', w3(e.x)+dx*1.45, 1.15, w3(e.y)+dy*1.45,
+          0.16, 2.10, 2.70, -e.a, [0.45,0.68,1], {alpha:a*0.26,add:true,noCull:true});
+        R3.draw('box', w3(e.x)+dx*1.52, 1.15, w3(e.y)+dy*1.52,
+          0.05, 2.30, 2.95, -e.a, [0.75,0.88,1], {alpha:a*0.16,add:true,noCull:true});
+        break; }
+      case 'para': {
+        /* Anillos rojos que suben por el cuerpo, mas un latigazo cruzado: se
+           tiene que leer de un vistazo y desde lejos que ese esta clavado. */
+        const alt=0.10+p*2.1, r=(1.7-p*0.8)*2;
+        R3.draw('disc', w3(e.x), alt, w3(e.y), r,1,r, 0, [1,0.26,0.34], {alpha:a*0.55,add:true});
+        R3.draw('disc', w3(e.x), alt+0.12, w3(e.y), r*0.55,1,r*0.55, 0, [1,0.75,0.8], {alpha:a*0.4,add:true});
+        for(let q=0;q<2;q++){
+          const ang=e.x*0.7+q*2.1+p*5;
+          R3.draw('box', w3(e.x)+Math.cos(ang)*0.5, 1.0+q*0.7, w3(e.y)+Math.sin(ang)*0.5,
+            0.09, 0.9-p*0.5, 0.09, ang, [1,0.35,0.42], {alpha:a*0.5,add:true,noCull:true});
+        }
+        break; }
       case 'bfring':
         R3.draw('disc', w3(e.x),0.13,w3(e.y), (0.8+p*1.6)*2,1,(0.8+p*1.6)*2,0,[1,1,1],
           {alpha:a*0.6,add:true}); break;
@@ -7791,6 +7872,56 @@ function overlay3D(g){
   ctx.stroke();
   ctx.fillStyle=hot?'#ff3f5c':'#ffffff66';
   ctx.beginPath(); ctx.arc(cx,cy,1.6,0,TAU); ctx.fill();
+
+  /* ---- aguante de la guardia, debajo de la mirilla ----
+     Aqui y no en la esquina: cuando bloqueas estas mirando al rival, no al
+     HUD, y una barra que no miras no sirve de nada. */
+  const gb = M.hero.gb||0;
+  if(gb>0.004){
+    const bw=64, bh=3, bx=cx-bw/2, by=cy+18;
+    ctx.fillStyle='#05050acc'; ctx.fillRect(bx-1,by-1,bw+2,bh+2);
+    const roto = !!M.hero.gbRoto;
+    ctx.fillStyle = roto ? '#7a1020' : gb>0.8 ? '#ff5a6a' : gb>0.55 ? '#ffa24d' : '#8ab6ff';
+    ctx.fillRect(bx,by,bw*gb,bh);
+    if(gb>0.8 && !roto){              // parpadea justo antes de reventar
+      ctx.globalAlpha=0.35+0.35*Math.sin(g.t*22);
+      ctx.fillStyle='#fff'; ctx.fillRect(bx,by,bw*gb,bh); ctx.globalAlpha=1;
+    }
+    ctx.strokeStyle='#ffffff30'; ctx.lineWidth=1;
+    ctx.strokeRect(bx-1.5,by-1.5,bw+3,bh+3);
+  }
+
+  /* ------------------------- PARALIZADO -------------------------
+     Quedarse quieto un segundo sin que nada lo indique se lee como que el
+     juego se ha colgado. Esto lo deja claro: la imagen pierde color, se abre
+     una vineta roja que late, y sale el aviso con el tiempo que queda. */
+  const par = (M.hero.status.stun && M.hero.status.stun.t) || 0;
+  if(par>0 && M.hero.alive){
+    postImpulse('desat', 0.62);
+    postImpulse('ca',    0.55);
+    const late = 0.55+0.45*Math.sin(g.t*14);
+    const vg = ctx.createRadialGradient(cx,cy,Math.min(VW,VH)*0.16, cx,cy,Math.max(VW,VH)*0.62);
+    vg.addColorStop(0,'rgba(0,0,0,0)');
+    vg.addColorStop(1,'rgba(150,10,26,'+(0.34*late).toFixed(3)+')');
+    ctx.fillStyle=vg; ctx.fillRect(0,0,VW,VH);
+    /* chispazos en el borde de la mirilla */
+    ctx.strokeStyle='rgba(255,90,106,'+(0.5*late).toFixed(2)+')'; ctx.lineWidth=1.5;
+    for(let i=0;i<5;i++){
+      const a0=(g.t*3.1+i*1.257)%TAU, r0=26+Math.sin(g.t*17+i)*4;
+      ctx.beginPath();
+      ctx.arc(cx,cy,r0,a0,a0+0.5); ctx.stroke();
+    }
+    const jx=(Math.random()-0.5)*3, jy=(Math.random()-0.5)*3;
+    ctx.textAlign='center';
+    ctx.font='900 17px system-ui'; ctx.lineWidth=4; ctx.strokeStyle='#000';
+    ctx.strokeText('PARALIZADO', cx+jx, cy+50+jy);
+    ctx.fillStyle='#ff8b96'; ctx.fillText('PARALIZADO', cx+jx, cy+50+jy);
+    /* cuenta atras: un arco que se cierra */
+    ctx.strokeStyle='#ff5a6a'; ctx.lineWidth=2.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy+50+18, 9, -Math.PI/2, -Math.PI/2 + TAU*Math.min(1,par/GUARDIA_CASTIGO));
+    ctx.stroke();
+  }
 
   drawMinimap(g);
   drawCenterMsg();
@@ -8558,11 +8689,11 @@ function drawCharacter(g, f){
       R3.draw('box', br[0],br[1],br[2], K(0.020),K(0.026*hs),K(0.104*hs), ry,
         mixc(hair,[0,0,0],0.25), Object.assign({rz:0.16*s2}, alp));
     }
-    /* arco superciliar: sin el, la cara es una superficie plana con cosas
-       pegadas; con el, hay craneo debajo */
-    { const bw=FACE(0.146, 0.116, 0);
-      R3.draw('box', bw[0],bw[1],bw[2], K(0.052),K(0.040*hs),K(0.34*hs), ry,
-        mixc(skin,[0,0,0],0.10), alp); }
+    /* QUITADO el arco superciliar. Lo puse para que se notara que hay craneo
+       debajo de la cara, pero era una caja de 0,34 de ancho cruzando la frente
+       entera y a 0,052 de grosor sobresalia lo suyo: en pantalla no se leia
+       como un hueso, se leia como una barra de color carne pegada en la
+       frente de TODOS los personajes. */
   } else {
     for(const s2 of [-1,1]){
       const e=FACE(FD*0.86, 0.025, 0.115*s2);
@@ -9980,8 +10111,10 @@ function refrescarMisiones(){
 
 /* ==================== RESIDUOS POR LA CALLE ==============================
    Entre marca y marca la ciudad estaba muerta: solo se caminaba. Estos son
-   posos de energia maldita que se acumulan en las esquinas; al pasar por
-   encima los absorbes y te devuelven energia y unos pocos Fragmentos.
+   fragmentos sueltos que se acumulan en las esquinas; al pasar por encima los
+   recoges. Solo dan Fragmentos: devolvian ademas un 16% de energia maldita,
+   pero eso convertia el paseo entre misiones en una barra de energia infinita
+   y quitaba sentido a administrarla.
    Viven en el CLIENTE y solo existen en mundo abierto, que es de un jugador:
    no entran en stateChecksum ni pueden desincronizar nada.               */
 const MOTES = {
@@ -10017,7 +10150,6 @@ const MOTES = {
       const p=this.list[i];
       p.ph += dt*2.2;
       if(dist2(p.x,p.y,f.x,f.y) < 62*62){
-        f.ce = Math.min(f.maxce, f.ce + f.maxce*0.16);
         const g2 = addCoins(9);
         SAVE.stats.coinsEarned=(SAVE.stats.coinsEarned||0)+g2;
         if(typeof AU!=='undefined' && AU.ok) AU.play('coin');
@@ -10034,10 +10166,21 @@ const MOTES = {
     for(const p of this.list){
       const x=w3(p.x), z=w3(p.y);
       if(!visible(x,z,1)) continue;
-      const y=0.75+Math.sin(p.ph)*0.16;
-      R3.draw('sph', x, y, z, 0.42,0.42,0.42, p.ph, [0.62,0.34,0.86], {alpha:0.9, add:true, emis:1.6});
-      R3.draw('sph', x, y, z, 1.05,1.05,1.05, 0, [0.62,0.34,0.86], {alpha:0.22, add:true, cullFront:true});
-      R3.draw('disc', x, 0.05, z, 1.5, 1, 1.5, 0, [0.62,0.34,0.86], {alpha:0.18, add:true});
+      /* CRISTAL, no bola. Dos conos unidos por la base, girando sobre si
+         mismos. Ademas se le baja el brillo: a 1.6 de emision el aditivo lo
+         quemaba hasta el blanco y no se le veia ni la forma ni el color. */
+      const y=0.78+Math.sin(p.ph)*0.16, giro=p.ph*0.8;
+      const col=[0.66,0.36,0.92], anch=0.62, alt=0.52;
+      R3.draw('cone', x, y+alt*0.5, z, anch,alt,anch, giro, col,
+        {alpha:0.95, add:true, emis:0.85});
+      R3.draw('cone', x, y-alt*0.5, z, anch,alt,anch, giro, col,
+        {alpha:0.95, add:true, emis:0.85, rz:Math.PI});
+      /* filo claro en la cintura del cristal */
+      R3.draw('disc', x, y, z, anch*1.12, 1, anch*1.12, giro, [0.92,0.80,1],
+        {alpha:0.42, add:true});
+      /* resplandor y sombra de luz en el suelo, para poder localizarlo */
+      R3.draw('sph', x, y, z, 1.15,1.35,1.15, 0, col, {alpha:0.14, add:true, cullFront:true});
+      R3.draw('disc', x, 0.05, z, 1.5, 1, 1.5, 0, col, {alpha:0.16, add:true});
     }
   }
 };
